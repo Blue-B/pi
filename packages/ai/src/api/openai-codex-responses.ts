@@ -369,6 +369,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						});
 					} catch (error) {
 						if (headerTimeoutSignal?.aborted && !options?.signal?.aborted) {
+							if (options?.sessionId) websocketSseFallbackSessions.delete(options.sessionId);
 							throw new Error(`Codex SSE response headers timed out after ${httpTimeoutMs}ms`);
 						}
 						throw error;

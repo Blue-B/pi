@@ -1253,6 +1253,85 @@ describe("openai-codex streaming", () => {
 		});
 	});
 
+	it("retries websocket after an SSE response header timeout", async () => {
+		vi.useFakeTimers();
+		const token = mockToken();
+		let connections = 0;
+
+		const fetchMock = vi.fn(
+			(_input: string | URL | Request, init?: RequestInit) =>
+				new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+				}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		class MockWebSocket extends EventTarget {
+			private readonly opens = connections++ > 0;
+
+			constructor() {
+				super();
+				if (this.opens) queueMicrotask(() => this.dispatchEvent(new Event("open")));
+			}
+
+			send(): void {
+				queueMicrotask(() => {
+					this.dispatchEvent(
+						Object.assign(new Event("message"), {
+							data: JSON.stringify({
+								type: "response.completed",
+								response: {
+									id: "resp_1",
+									status: "completed",
+									usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+								},
+							}),
+						}),
+					);
+				});
+			}
+
+			close(): void {}
+		}
+
+		vi.stubGlobal("WebSocket", MockWebSocket);
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: 1 }],
+		};
+		const options = {
+			apiKey: token,
+			sessionId: "sse-header-timeout",
+			transport: "auto" as const,
+			timeoutMs: 20,
+			websocketConnectTimeoutMs: 10,
+		};
+
+		const firstResultPromise = streamOpenAICodexResponses(model, context, options).result();
+		await vi.advanceTimersByTimeAsync(30);
+		const firstResult = await firstResultPromise;
+		expect(firstResult.stopReason).toBe("error");
+		expect(firstResult.errorMessage).toBe("Codex SSE response headers timed out after 20ms");
+
+		const secondResult = await streamOpenAICodexResponses(model, context, options).result();
+		expect(secondResult.stopReason).toBe("stop");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(connections).toBe(2);
+	});
+
 	it("reconnects once when the websocket connection limit is reached before output starts", async () => {
 		const token = mockToken();
 		let connections = 0;
