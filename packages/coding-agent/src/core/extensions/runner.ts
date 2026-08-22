@@ -178,7 +178,7 @@ export type NavigateTreeHandler = (
 
 export type SwitchSessionHandler = (
 	sessionPath: string,
-	options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
+	options?: { cwdOverride?: string; withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 ) => Promise<{ cancelled: boolean }>;
 
 export type ReloadHandler = () => Promise<void>;

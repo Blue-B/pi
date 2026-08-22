@@ -1202,6 +1202,7 @@ Switch to a different session file:
 
 ```typescript
 const result = await ctx.switchSession("/path/to/session.jsonl", {
+  cwdOverride: "/path/to/project",
   withSession: async (ctx) => {
     await ctx.sendUserMessage("Resume work in the replacement session");
   },
@@ -1212,6 +1213,7 @@ if (result.cancelled) {
 ```
 
 Options:
+- `cwdOverride`: use this working directory instead of the cwd stored in the session file
 - `withSession`: run post-switch work against a fresh replacement-session context. Do not use captured old `pi` / command `ctx`; see [Session replacement lifecycle and footguns](#session-replacement-lifecycle-and-footguns).
 
 To discover available sessions, use the static `SessionManager.list()` or `SessionManager.listAll()` methods:

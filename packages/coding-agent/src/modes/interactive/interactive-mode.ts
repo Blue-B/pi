@@ -5352,6 +5352,7 @@ export class InteractiveMode {
 		this.clearStatusIndicator();
 		try {
 			const result = await this.runtimeHost.switchSession(sessionPath, {
+				cwdOverride: options?.cwdOverride,
 				withSession: options?.withSession,
 				projectTrustContextFactory: (cwd) => this.createProjectTrustContext(cwd),
 			});

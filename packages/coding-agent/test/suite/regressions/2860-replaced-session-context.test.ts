@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AgentSession } from "../../../src/core/agent-session.ts";
 import {
+	type AgentSessionRuntime,
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
@@ -14,6 +15,20 @@ import { AuthStorage } from "../../../src/core/auth-storage.ts";
 import { ModelRuntime } from "../../../src/core/model-runtime.ts";
 import { SessionManager } from "../../../src/core/session-manager.ts";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionFactory } from "../../../src/index.ts";
+import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
+
+const handleResumeSession = Reflect.get(InteractiveMode.prototype, "handleResumeSession") as (
+	this: {
+		clearStatusIndicator(): void;
+		runtimeHost: AgentSessionRuntime;
+		createProjectTrustContext(cwd: string): unknown;
+		showStatus(message: string): void;
+		promptForMissingSessionCwd(error: unknown): Promise<string | undefined>;
+		handleFatalRuntimeError(prefix: string, error: unknown): Promise<never>;
+	},
+	sessionPath: string,
+	options?: Parameters<ExtensionCommandContext["switchSession"]>[1],
+) => Promise<{ cancelled: boolean }>;
 
 function getText(message: AgentSession["messages"][number]): string {
 	if (!("content" in message)) {
@@ -120,7 +135,23 @@ describe("regression #2860: replaced session callbacks", () => {
 						});
 						return { cancelled: result.cancelled };
 					},
-					switchSession: async (sessionPath, options) => runtime.switchSession(sessionPath, options),
+					switchSession: async (sessionPath, options) =>
+						handleResumeSession.call(
+							{
+								clearStatusIndicator() {},
+								runtimeHost: runtime,
+								createProjectTrustContext() {},
+								showStatus() {},
+								async promptForMissingSessionCwd() {
+									return undefined;
+								},
+								async handleFatalRuntimeError(_prefix, error) {
+									throw error;
+								},
+							},
+							sessionPath,
+							options,
+						),
 					reload: async () => {
 						await session.reload();
 					},
@@ -143,6 +174,31 @@ describe("regression #2860: replaced session callbacks", () => {
 
 		return { runtime, faux };
 	}
+
+	it("forwards cwdOverride from an extension command without calling the provider", async () => {
+		let targetSessionPath = "";
+		let cwdOverride = "";
+		const { runtime, faux } = await createRuntimeForTest((pi) => {
+			pi.registerCommand("switch-cwd", {
+				description: "switch-cwd",
+				handler: async (_args, ctx) => {
+					await ctx.switchSession(targetSessionPath, { cwdOverride });
+				},
+			});
+		}, []);
+		cwdOverride = join(runtime.cwd, "override");
+		mkdirSync(cwdOverride);
+		const targetSession = SessionManager.create(runtime.cwd, runtime.session.sessionManager.getSessionDir());
+		targetSession.appendMessage(fauxAssistantMessage("target"));
+		targetSessionPath = targetSession.getSessionFile()!;
+
+		await runtime.session.prompt("/switch-cwd");
+
+		expect(realpathSync(runtime.cwd)).toBe(realpathSync(cwdOverride));
+		expect(realpathSync(runtime.session.sessionManager.getCwd())).toBe(realpathSync(cwdOverride));
+		expect(runtime.session.sessionFile).toBe(targetSessionPath);
+		expect(faux.state.callCount).toBe(0);
+	});
 
 	it("rebinds before withSession, targets the replacement session, and invalidates stale pi/ctx", async () => {
 		const events: string[] = [];
